@@ -54,10 +54,9 @@ class Gmail(GoogleServiceMixin):
     api_name = 'gmail'
     api_version = 'v1'
     scopes = ['https://www.googleapis.com/auth/gmail.readonly']
-    credential_name = 'gmail'
 
-    def __init__(self, account_email):
-        super().__init__(account_email)
+    def __init__(self, credentials, account_email):
+        super().__init__(credentials, account_email)
         self.emails = []
         self.email_contents = []
 

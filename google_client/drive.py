@@ -1,7 +1,7 @@
 from io import BytesIO
 from time import sleep
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload, HttpError
-from .service import GoogleServiceMixin
+from google_client.service import GoogleServiceMixin
 
 folder_type = 'application/vnd.google-apps.folder'
 
@@ -11,7 +11,6 @@ class GoogleDrive(GoogleServiceMixin):
     api_name = 'drive'
     api_version = 'v3'
     scopes = ['https://www.googleapis.com/auth/drive']
-    credential_name = 'drive'
 
     def file_list(self, **kwargs):
         if 'fields' not in kwargs:

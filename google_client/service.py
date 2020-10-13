@@ -3,22 +3,20 @@ from time import sleep
 from google.oauth2 import service_account
 from googleapiclient import discovery
 from googleapiclient.http import HttpError
-from encrypted_credentials import django_credentials
 
 
 class GoogleServiceMixin:
     api_name = None
     api_version = None
     scopes = None
-    credential_name = None
 
-    def __init__(self, account_email=None):
-        self.credentials = None
+    def __init__(self, credentials, account_email=None):
+        self.credentials = credentials
         self.account_email = account_email
         self.service = self.get_service_account()
 
     def get_service_account(self):
-        json_credentials = json.loads(django_credentials.get_credentials(self.credential_name))
+        json_credentials = json.loads(self.credentials)
         self.credentials = service_account.Credentials.from_service_account_info(json_credentials, scopes=self.scopes)
         if self.account_email:
             self.credentials = self.credentials.with_subject(self.account_email)
