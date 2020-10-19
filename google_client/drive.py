@@ -87,10 +87,10 @@ class GoogleDrive(GoogleServiceMixin):
         if folder_path.find('/') < 0:
             parent_folder = kwargs['folder']
         else:
-            parent_folder = self.get_folder(folder_path[0:folder_path.rfind('/')], **kwargs)
-        folder = self.create_folder(folder_path[folder_path.rfind('/') + 1:], parent_folder)
+            parent_folder = self.find_create_folder(folder_path[0:folder_path.rfind('/')], **kwargs)
+        self.create_folder(folder_path[folder_path.rfind('/') + 1:], parent_folder)
         sleep(5)
-        return folder
+        return self.get_folder(folder_path, **kwargs)
 
     def create_file_body(self, body, data_stream):
         if data_stream.getbuffer().nbytes == 0:
