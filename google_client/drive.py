@@ -1,9 +1,17 @@
-from io import BytesIO
+import os
+from datetime import datetime, timezone
+from io import BytesIO, FileIO
 from time import sleep
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload, HttpError
 from google_client.service import GoogleServiceMixin
 
 folder_type = 'application/vnd.google-apps.folder'
+default_file_fields = ('id, name, appProperties, webViewLink, size, modifiedTime, createdTime, '
+                       'mimeType, owners, thumbnailLink, md5Checksum')
+
+
+class FileNotFound(Exception):
+    pass
 
 
 class GoogleDrive(GoogleServiceMixin):
@@ -12,10 +20,19 @@ class GoogleDrive(GoogleServiceMixin):
     api_version = 'v3'
     scopes = ['https://www.googleapis.com/auth/drive']
 
+    @staticmethod
+    def convert_time(t):
+        utc_dt = datetime.strptime(t[:-1] + ' +0000', '%Y-%m-%dT%H:%M:%S.%f %z')
+        return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=None).replace(tzinfo=None)
+
+    @classmethod
+    def convert_dict_time(cls, file_dict, key):
+        if key in file_dict:
+            file_dict[key] = cls.convert_time(file_dict[key])
+
     def file_list(self, **kwargs):
         if 'fields' not in kwargs:
-            kwargs['fields'] = ("nextPageToken, files(id, name, appProperties, webViewLink, "
-                                "size, modifiedTime, mimeType, owners, thumbnailLink, md5Checksum)")
+            kwargs['fields'] = f"nextPageToken, files({default_file_fields})"
         results = self.service.files().list(**kwargs, pageSize=50).execute()
         next_page = results.get('nextPageToken')
         items = results.get('files', [])
@@ -23,11 +40,17 @@ class GoogleDrive(GoogleServiceMixin):
             results = self.service.files().list(**kwargs, pageSize=50, pageToken=next_page).execute()
             next_page = results.get('nextPageToken')
             items = items + results.get('files', [])
+        for i in items:
+            self.convert_dict_time(i, 'modifiedTime')
+            self.convert_dict_time(i, 'createdTime')
         return items
 
     @staticmethod
     def build_q(name=None, mime_type=None, folder=None, shared_with_me=None, trashed=False):
-        search = [f'trashed = {str(trashed).lower()}']
+        if trashed is None:
+            search = []
+        else:
+            search = [f'trashed = {str(trashed).lower()}']
         if name:
             search.append(f"name='{name}'")
         if mime_type:
@@ -59,20 +82,67 @@ class GoogleDrive(GoogleServiceMixin):
         if next_folder and len(next_folder) > 0:
             return next_folder[0]
 
-    def get_file(self, name, folder):
-        folder_id = self.get_folder(folder)
-        file_id = self.file_list(q=self.build_q(name=name, folder=folder_id))[0]['id']
-        return self.get_file_from_id(file_id)
+    def get_folder_id(self, folder_id, folder_path, folder):
+        if folder_id:
+            return folder_id
+        if folder:
+            return folder['id']
+        return self.get_folder(folder_path)['id']
 
-    def get_file_from_id(self, file):
-        request = self.service.files().get_media(fileId=file['id'])
-        fh = BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while done is False:
-            status, done = downloader.next_chunk()
-        fh.seek(0)
-        return fh
+    def get_file(self, folder_id=None, folder_path=None, folder=None, file_name=None, file_id=None):
+        if not file_id:
+            folder_id = self.get_folder_id(folder_id, folder_path, folder)
+            files = self.file_list(q=self.build_q(name=file_name, folder=folder_id))
+            if not files:
+                raise FileNotFound
+            return files[0]
+        else:
+            return self.service.files().get(fileId=file_id, fields=default_file_fields).execute()
+
+    def get_file_contents(self, folder_id=None, folder_path=None, folder=None,
+                          file_name=None, file_id=None,
+                          local_folder=None):
+        """
+        One of the folder parameters must be supplied if file_id is not set
+        :param folder_id: Google Drive folder id
+        :param folder_path: Path separated by /
+        :param folder: Folder dictionary with 'id' key as folder id
+
+        :param file_name:
+        :param file_id:
+
+        :param local_folder: If set it will download the file to local drive and return the filename
+
+        :return: if local folder the file name, otherwise a BytesIO stream
+        """
+
+        if not file_id:
+            folder_id = self.get_folder_id(folder_id, folder_path, folder)
+            files = self.file_list(q=self.build_q(name=file_name, folder=folder_id))
+            if not files:
+                raise FileNotFound
+            file_id = files[0]['id']
+            file_size = int(files[0]['size'])
+        else:
+            file_size = int(self.get_file(file_id=file_id)['size'])
+
+        if local_folder:
+            if not file_name:
+                file_name = self.get_file(file_id=file_id)['name']
+            fh = FileIO(os.path.join(local_folder, file_name), 'wb')
+        else:
+            fh = BytesIO()
+        if file_size > 0:
+            request = self.service.files().get_media(fileId=file_id)
+            downloader = MediaIoBaseDownload(fh, request, chunksize=1024*1024*10)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+        if local_folder:
+            return file_name
+        else:
+            fh.seek(0)
+            return fh
 
     def create_folder(self, title, parent):
         body = {'name': title, 'mimeType': folder_type}
@@ -93,7 +163,9 @@ class GoogleDrive(GoogleServiceMixin):
         return self.get_folder(folder_path, **kwargs)
 
     def create_file_body(self, body, data_stream):
-        if data_stream.getbuffer().nbytes == 0:
+        size = data_stream.seek(0, 2)
+        data_stream.seek(0)
+        if size == 0:
             google_file = self.service.files().create(body=body).execute()
         else:
             if body.get('mimeType'):
@@ -107,7 +179,7 @@ class GoogleDrive(GoogleServiceMixin):
                 google_file = self.service.files().create(body=body, media_body=media_body).execute()
         return google_file
 
-    def create_file_stream(self, title, parent_ids, mime_type, data_stream, body=None):
+    def create_file_stream(self, title, parent, data_stream, body=None, mime_type=None):
         if body is None:
             body = {}
         body['name'] = title
@@ -115,12 +187,12 @@ class GoogleDrive(GoogleServiceMixin):
             body['mimeType'] = mime_type
         else:
             body['mimeType'] = '[*/*]'
-        if parent_ids:
-            body['parents'] = parent_ids
+        if parent:
+            body['parents'] = [parent['id']]
         return self.create_file_body(body, data_stream)
 
-    def create_file(self, title, parent_ids, mime_type, data, body=None):
-        return self.create_file_stream(title, parent_ids, mime_type, BytesIO(data), body)
+    def create_file(self, title, parent, mime_type, data, body=None):
+        return self.create_file_stream(title, parent, BytesIO(data), body=body, mime_type=mime_type)
 
     def get_all_descendants(self, folder_id):
         files_folders = self.file_list(q=self.build_q(folder=folder_id))
