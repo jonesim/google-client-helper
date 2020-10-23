@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="google-client-helper",
-    version="0.0.2",
+    version="0.0.3",
     author="Ian Jones",
     description="Helpers for the Google Drive and Gmail APIs using a service account",
     long_description=long_description,
